@@ -1,245 +1,15 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
-#include <math.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
-typedef struct Vec3
-{
-    float x, y, z;
-} Vec3;
-
-typedef struct Mat4
-{
-    float m[16];
-} Mat4;
-
-static void SDLCALL sdl_log_cb(void *userdata, int category, SDL_LogPriority priority, const char *message)
-{
-    (void)userdata;
-    fprintf(stderr, "SDL[%d][%d] %s\n", category, (int)priority, message);
-}
-
-static void dump_env(void)
-{
-    const char *a = getenv("DISPLAY");
-    const char *b = getenv("WAYLAND_DISPLAY");
-    const char *c = getenv("XDG_SESSION_TYPE");
-    const char *d = getenv("XDG_RUNTIME_DIR");
-    fprintf(stderr, "ENV DISPLAY=%s\n", a ? a : "(null)");
-    fprintf(stderr, "ENV WAYLAND_DISPLAY=%s\n", b ? b : "(null)");
-    fprintf(stderr, "ENV XDG_SESSION_TYPE=%s\n", c ? c : "(null)");
-    fprintf(stderr, "ENV XDG_RUNTIME_DIR=%s\n", d ? d : "(null)");
-}
-
-static void dump_video_drivers(void)
-{
-    int n = SDL_GetNumVideoDrivers();
-    fprintf(stderr, "SDL_GetNumVideoDrivers=%d\n", n);
-    for (int i = 0; i < n; i++)
-    {
-        const char *name = SDL_GetVideoDriver(i);
-        fprintf(stderr, "  video_driver[%d]=%s\n", i, name ? name : "(null)");
-    }
-}
-
-static Mat4 mat4_identity(void)
-{
-    Mat4 r;
-    memset(&r, 0, sizeof(r));
-    r.m[0] = 1.0f;
-    r.m[5] = 1.0f;
-    r.m[10] = 1.0f;
-    r.m[15] = 1.0f;
-    return r;
-}
-
-static Mat4 mat4_mul(Mat4 a, Mat4 b)
-{
-    Mat4 r;
-    for (int c = 0; c < 4; c++)
-    {
-        for (int row = 0; row < 4; row++)
-        {
-            r.m[c * 4 + row] =
-                a.m[0 * 4 + row] * b.m[c * 4 + 0] +
-                a.m[1 * 4 + row] * b.m[c * 4 + 1] +
-                a.m[2 * 4 + row] * b.m[c * 4 + 2] +
-                a.m[3 * 4 + row] * b.m[c * 4 + 3];
-        }
-    }
-    return r;
-}
-
-static Mat4 mat4_rotate_x(float a)
-{
-    Mat4 r = mat4_identity();
-    float c = cosf(a);
-    float s = sinf(a);
-    r.m[5] = c;
-    r.m[6] = s;
-    r.m[9] = -s;
-    r.m[10] = c;
-    return r;
-}
-
-static Mat4 mat4_rotate_y(float a)
-{
-    Mat4 r = mat4_identity();
-    float c = cosf(a);
-    float s = sinf(a);
-    r.m[0] = c;
-    r.m[2] = -s;
-    r.m[8] = s;
-    r.m[10] = c;
-    return r;
-}
-
-static Mat4 mat4_perspective(float fovy_radians, float aspect, float znear, float zfar)
-{
-    float f = 1.0f / tanf(fovy_radians * 0.5f);
-    Mat4 r;
-    memset(&r, 0, sizeof(r));
-    r.m[0] = f / aspect;
-    r.m[5] = f;
-    r.m[10] = (zfar + znear) / (znear - zfar);
-    r.m[11] = -1.0f;
-    r.m[14] = (2.0f * zfar * znear) / (znear - zfar);
-    return r;
-}
-
-static Vec3 vec3_sub(Vec3 a, Vec3 b)
-{
-    Vec3 r = { a.x - b.x, a.y - b.y, a.z - b.z };
-    return r;
-}
-
-static Vec3 vec3_cross(Vec3 a, Vec3 b)
-{
-    Vec3 r = {
-        a.y * b.z - a.z * b.y,
-        a.z * b.x - a.x * b.z,
-        a.x * b.y - a.y * b.x
-    };
-    return r;
-}
-
-static float vec3_dot(Vec3 a, Vec3 b)
-{
-    return a.x * b.x + a.y * b.y + a.z * b.z;
-}
-
-static Vec3 vec3_norm(Vec3 v)
-{
-    float len = sqrtf(vec3_dot(v, v));
-    if (len <= 0.0f)
-    {
-        Vec3 z = { 0, 0, 0 };
-        return z;
-    }
-    Vec3 r = { v.x / len, v.y / len, v.z / len };
-    return r;
-}
-
-static Mat4 mat4_lookat(Vec3 eye, Vec3 center, Vec3 up)
-{
-    Vec3 f = vec3_norm(vec3_sub(center, eye));
-    Vec3 s = vec3_norm(vec3_cross(f, up));
-    Vec3 u = vec3_cross(s, f);
-
-    Mat4 r = mat4_identity();
-    r.m[0] = s.x;
-    r.m[1] = u.x;
-    r.m[2] = -f.x;
-
-    r.m[4] = s.y;
-    r.m[5] = u.y;
-    r.m[6] = -f.y;
-
-    r.m[8] = s.z;
-    r.m[9] = u.z;
-    r.m[10] = -f.z;
-
-    r.m[12] = -vec3_dot(s, eye);
-    r.m[13] = -vec3_dot(u, eye);
-    r.m[14] = vec3_dot(f, eye);
-
-    return r;
-}
+#include "mat4.h"
+#include "shader.h"
+#include "log.h"
 
 typedef struct Vertex
 {
     float px, py, pz;
     float cr, cg, cb;
 } Vertex;
-
-static void *read_entire_file(const char *path, size_t *out_size)
-{
-    FILE *f = fopen(path, "rb");
-    if (!f)
-    {
-        return NULL;
-    }
-    if (fseek(f, 0, SEEK_END) != 0)
-    {
-        fclose(f);
-        return NULL;
-    }
-    long sz = ftell(f);
-    if (sz < 0)
-    {
-        fclose(f);
-        return NULL;
-    }
-    if (fseek(f, 0, SEEK_SET) != 0)
-    {
-        fclose(f);
-        return NULL;
-    }
-    void *buf = malloc((size_t)sz);
-    if (!buf)
-    {
-        fclose(f);
-        return NULL;
-    }
-    size_t got = fread(buf, 1, (size_t)sz, f);
-    fclose(f);
-    if (got != (size_t)sz)
-    {
-        free(buf);
-        return NULL;
-    }
-    *out_size = (size_t)sz;
-    return buf;
-}
-
-static SDL_GPUShader *load_spirv_shader(SDL_GPUDevice *device, const char *path, SDL_GPUShaderStage stage, uint32_t num_uniform_buffers)
-{
-    size_t code_size = 0;
-    void *code = read_entire_file(path, &code_size);
-    if (!code)
-    {
-        return NULL;
-    }
-
-    SDL_GPUShaderCreateInfo ci;
-    SDL_zero(ci);
-    ci.stage = stage;
-    ci.format = SDL_GPU_SHADERFORMAT_SPIRV;
-    ci.code = code;
-    ci.code_size = (Uint32)code_size;
-    ci.entrypoint = "main";
-    ci.num_samplers = 0;
-    ci.num_storage_textures = 0;
-    ci.num_storage_buffers = 0;
-    ci.num_uniform_buffers = num_uniform_buffers;
-
-    SDL_GPUShader *s = SDL_CreateGPUShader(device, &ci);
-    free(code);
-    return s;
-}
 
 int main(int argc, char **argv)
 {
@@ -566,16 +336,16 @@ int main(int argc, char **argv)
         float aspect = (h == 0) ? 1.0f : ((float)w / (float)h);
 
         const float PI = 3.14159265358979323846f;
-        Mat4 proj = mat4_perspective(45.0f * (PI / 180.0f), aspect, 0.1f, 100.0f);
+        mat4 proj = mat4_perspective(45.0f * (PI / 180.0f), aspect, 0.1f, 100.0f);
 
-        Vec3 eye = { 0.0f, 0.0f, 3.0f };
-        Vec3 center = { 0.0f, 0.0f, 0.0f };
-        Vec3 up = { 0.0f, 1.0f, 0.0f };
-        Mat4 view = mat4_lookat(eye, center, up);
+        vec3 eye = { 0.0f, 0.0f, 3.0f };
+        vec3 center = { 0.0f, 0.0f, 0.0f };
+        vec3 up = { 0.0f, 1.0f, 0.0f };
+        mat4 view = mat4_lookat(eye, center, up);
 
-        Mat4 model = mat4_mul(mat4_rotate_y(time_s), mat4_rotate_x(time_s * 0.7f));
-        Mat4 mv = mat4_mul(view, model);
-        Mat4 mvp = mat4_mul(proj, mv);
+        mat4 model = mat4_mul(mat4_rotate_y(time_s), mat4_rotate_x(time_s * 0.7f));
+        mat4 mv = mat4_mul(view, model);
+        mat4 mvp = mat4_mul(proj, mv);
 
         SDL_GPUColorTargetInfo color;
         SDL_zero(color);
@@ -633,4 +403,3 @@ int main(int argc, char **argv)
     SDL_Quit();
     return 0;
 }
-
