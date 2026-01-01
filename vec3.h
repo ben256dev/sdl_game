@@ -1,11 +1,28 @@
+#pragma once
+
+#include <math.h>
+
 typedef struct vec3
 {
     float x, y, z;
 } vec3;
 
+#define VEC3_ZERO { 0.0f, 0.0f, 0.0f };
+
+static vec3 vec3_add(vec3 a, vec3 b)
+{
+    vec3 r = { a.x + b.x, a.y + b.y, a.z + b.z };
+    return r;
+}
 static vec3 vec3_sub(vec3 a, vec3 b)
 {
     vec3 r = { a.x - b.x, a.y - b.y, a.z - b.z };
+    return r;
+}
+
+static vec3 vec3_mul(vec3 vector, float scalar)
+{
+    vec3 r = { vector.x * scalar, vector.y * scalar, vector.z * scalar };
     return r;
 }
 

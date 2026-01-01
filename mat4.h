@@ -1,3 +1,5 @@
+#pragma once
+
 #include <math.h>
 
 #include "vec3.h"
@@ -32,6 +34,15 @@ static mat4 mat4_mul(mat4 a, mat4 b)
                 a.m[3 * 4 + row] * b.m[c * 4 + 3];
         }
     }
+    return r;
+}
+
+static mat4 mat4_translate(vec3 t)
+{
+    mat4 r = mat4_identity();
+    r.m[12] = t.x;
+    r.m[13] = t.y;
+    r.m[14] = t.z;
     return r;
 }
 
