@@ -1,16 +1,40 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
 
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
 #include "vec2.h"
 #include "mat4.h"
 #include "shader.h"
 #include "log.h"
+#include "lua_cam.h"
 
 typedef struct Vertex
 {
     float px, py, pz;
     float cr, cg, cb;
 } Vertex;
+
+static uint64_t build_key_mask(void)
+{
+    const bool *keys = SDL_GetKeyboardState(NULL);
+    uint64_t m = 0;
+
+    if (keys[SDL_SCANCODE_LEFT])  m |= CAMKEY_LEFT;
+    if (keys[SDL_SCANCODE_RIGHT]) m |= CAMKEY_RIGHT;
+    if (keys[SDL_SCANCODE_UP])    m |= CAMKEY_UP;
+    if (keys[SDL_SCANCODE_DOWN])  m |= CAMKEY_DOWN;
+    if (keys[SDL_SCANCODE_SPACE]) m |= CAMKEY_SPACE;
+    if (keys[SDL_SCANCODE_LCTRL] || keys[SDL_SCANCODE_RCTRL]) m |= CAMKEY_LCTRL;
+    if (keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT]) m |= CAMKEY_LSHIFT;
+    if (keys[SDL_SCANCODE_TAB])   m |= CAMKEY_TAB;
+    if (keys[SDL_SCANCODE_ESCAPE]) m |= CAMKEY_ESC;
+
+    return m;
+}
 
 int main(int argc, char **argv)
 {
@@ -271,45 +295,53 @@ int main(int argc, char **argv)
     Uint32 depth_h = 0;
 
     uint64_t t0 = SDL_GetTicksNS();
+    uint64_t last_frame = t0;
 
-    int mouse_look_on = 0;
-    float yaw = 0.0f;
-    float pitch = 0.0f;
-#define MOUSE_SENSITIVITY 0.0001f
-#define CAMERA_MOVE_SPEED 0.1f
+    LuaCam cam;
+    if (!luacam_init(&cam, "camera.lua"))
+    {
+        fprintf(stderr, "Failed to init Lua camera\n");
+        SDL_WaitForGPUIdle(device);
+        SDL_ReleaseGPUGraphicsPipeline(device, pipeline);
+        SDL_ReleaseGPUTransferBuffer(device, upload_tb);
+        SDL_ReleaseGPUBuffer(device, vb);
+        SDL_ReleaseGPUBuffer(device, ib);
+        SDL_ReleaseGPUShader(device, vs);
+        SDL_ReleaseGPUShader(device, fs);
+        SDL_ReleaseWindowFromGPUDevice(device, window);
+        SDL_DestroyGPUDevice(device);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
+
+    bool mouse_look_on = false;
     SDL_SetWindowRelativeMouseMode(window, mouse_look_on);
-
-    vec3 camera_position = VEC3_ZERO;
 
     int running = 1;
     while (running)
     {
+        luacam_reload_if_needed(&cam);
+
+        float mouse_dx = 0.0f;
+        float mouse_dy = 0.0f;
+
         SDL_Event event;
         while (SDL_PollEvent(&event))
         {
             if (event.type == SDL_EVENT_QUIT)
-            {
                 running = false;
-            }
-            if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE)
-            {
-                running = false;
-            }
-            if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_TAB)
-            {
-                mouse_look_on = !mouse_look_on;
-                SDL_SetWindowRelativeMouseMode(window, mouse_look_on);
-            }
-            if (mouse_look_on && event.type == SDL_EVENT_MOUSE_MOTION)
-            {
-                yaw += (float)event.motion.xrel * MOUSE_SENSITIVITY;
-                pitch -= (float)event.motion.yrel * MOUSE_SENSITIVITY;
 
-                float lim = 1.553343f;
-                if (pitch < -lim) pitch = -lim;
-                if (pitch >  lim) pitch =  lim;
+            if (event.type == SDL_EVENT_MOUSE_MOTION)
+            {
+                mouse_dx += (float)event.motion.xrel;
+                mouse_dy += (float)event.motion.yrel;
             }
         }
+
+        uint64_t now = SDL_GetTicksNS();
+        float dt_s = (float)((double)(now - last_frame) / 1000000000.0);
+        last_frame = now;
 
         SDL_GPUCommandBuffer *cb = SDL_AcquireGPUCommandBuffer(device);
 
@@ -354,46 +386,29 @@ int main(int argc, char **argv)
             }
         }
 
-        uint64_t now = SDL_GetTicksNS();
         float time_s = (float)((double)(now - t0) / 1000000000.0);
-
         float aspect = (h == 0) ? 1.0f : ((float)w / (float)h);
 
         const float PI = 3.14159265358979323846f;
         mat4 proj = mat4_perspective(45.0f * (PI / 180.0f), aspect, 0.1f, 100.0f);
 
-        vec3 eye = { 0.0f, 0.0f, 3.0f };
-        vec3 world_up = { 0.0f, 1.0f, 0.0f };
+        uint64_t keys_mask = build_key_mask();
 
-        vec3 forward = {
-            cosf(pitch) * sinf(yaw),
-            sinf(pitch),
-            -cosf(pitch) * cosf(yaw),
-        };
-        forward = vec3_norm(forward);
+        mat4 view = mat4_identity();
+        bool want_mouse_look = mouse_look_on;
+        bool want_quit = false;
 
-        vec3 right = vec3_norm(vec3_cross(forward, world_up));
-        vec3 cam_up = vec3_cross(right, forward);
+        if (luacam_update(&cam, keys_mask, mouse_dx, mouse_dy, dt_s, &view, &want_mouse_look, &want_quit))
+        {
+            if (want_quit)
+                running = false;
 
-        vec3 center = vec3_add(eye, forward);
-
-        vec3 move_input_vector = VEC2_ZERO;
-        const bool *keys = SDL_GetKeyboardState(NULL);
-        move_input_vector.x = keys[SDL_SCANCODE_LEFT] - keys[SDL_SCANCODE_RIGHT];
-        move_input_vector.z = keys[SDL_SCANCODE_DOWN] - keys[SDL_SCANCODE_UP];
-        move_input_vector.y = keys[SDL_SCANCODE_LCTRL] - keys[SDL_SCANCODE_SPACE];
-
-        vec3 move_right = vec3_mul(right, move_input_vector.x);
-        vec3 move_forward = vec3_mul(forward, move_input_vector.z);
-        vec3 move_up = vec3_mul(world_up, move_input_vector.y);
-
-        camera_position = vec3_add(camera_position, vec3_mul(move_right, CAMERA_MOVE_SPEED));
-        camera_position = vec3_add(camera_position, vec3_mul(move_forward, CAMERA_MOVE_SPEED));
-        camera_position = vec3_add(camera_position, vec3_mul(move_up, CAMERA_MOVE_SPEED));
-
-        mat4 look = mat4_lookat(eye, center, cam_up);
-        mat4 move = mat4_translate(camera_position);
-        mat4 view = mat4_mul(look, move);
+            if (want_mouse_look != mouse_look_on)
+            {
+                mouse_look_on = want_mouse_look;
+                SDL_SetWindowRelativeMouseMode(window, mouse_look_on);
+            }
+        }
 
         mat4 model = mat4_mul(mat4_rotate_y(time_s), mat4_rotate_x(time_s * 0.7f));
         mat4 mv = mat4_mul(view, model);
@@ -439,6 +454,8 @@ int main(int argc, char **argv)
         SDL_SubmitGPUCommandBuffer(cb);
     }
 
+    luacam_shutdown(&cam);
+
     SDL_WaitForGPUIdle(device);
 
     if (depth_tex) SDL_ReleaseGPUTexture(device, depth_tex);
@@ -455,3 +472,4 @@ int main(int argc, char **argv)
     SDL_Quit();
     return 0;
 }
+

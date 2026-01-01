@@ -1,6 +1,7 @@
 #pragma once
 
 #include <math.h>
+#include <string.h>
 
 #include "vec3.h"
 
@@ -9,7 +10,7 @@ typedef struct mat4
     float m[16];
 } mat4;
 
-static mat4 mat4_identity(void)
+static inline mat4 mat4_identity(void)
 {
     mat4 r;
     memset(&r, 0, sizeof(r));
@@ -20,7 +21,7 @@ static mat4 mat4_identity(void)
     return r;
 }
 
-static mat4 mat4_mul(mat4 a, mat4 b)
+static inline mat4 mat4_mul(mat4 a, mat4 b)
 {
     mat4 r;
     for (int c = 0; c < 4; c++)
@@ -37,7 +38,7 @@ static mat4 mat4_mul(mat4 a, mat4 b)
     return r;
 }
 
-static mat4 mat4_translate(vec3 t)
+static inline mat4 mat4_translate(vec3 t)
 {
     mat4 r = mat4_identity();
     r.m[12] = t.x;
@@ -46,7 +47,7 @@ static mat4 mat4_translate(vec3 t)
     return r;
 }
 
-static mat4 mat4_rotate_x(float a)
+static inline mat4 mat4_rotate_x(float a)
 {
     mat4 r = mat4_identity();
     float c = cosf(a);
@@ -58,7 +59,7 @@ static mat4 mat4_rotate_x(float a)
     return r;
 }
 
-static mat4 mat4_rotate_y(float a)
+static inline mat4 mat4_rotate_y(float a)
 {
     mat4 r = mat4_identity();
     float c = cosf(a);
@@ -70,7 +71,7 @@ static mat4 mat4_rotate_y(float a)
     return r;
 }
 
-static mat4 mat4_perspective(float fovy_radians, float aspect, float znear, float zfar)
+static inline mat4 mat4_perspective(float fovy_radians, float aspect, float znear, float zfar)
 {
     float f = 1.0f / tanf(fovy_radians * 0.5f);
     mat4 r;
@@ -83,7 +84,7 @@ static mat4 mat4_perspective(float fovy_radians, float aspect, float znear, floa
     return r;
 }
 
-static mat4 mat4_lookat(vec3 eye, vec3 center, vec3 up)
+static inline mat4 mat4_lookat(vec3 eye, vec3 center, vec3 up)
 {
     vec3 f = vec3_norm(vec3_sub(center, eye));
     vec3 s = vec3_norm(vec3_cross(f, up));
