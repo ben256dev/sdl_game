@@ -12,6 +12,49 @@
 #include "log.h"
 #include "lua_cam.h"
 
+SDL_GPUDevice*  sdl_device;
+SDL_GPUTexture* sdl_depth_tex = NULL;
+
+#define SDL_HANDLE_MAX_COUNT 10
+SDL_GPUGraphicsPipeline* sdl_pipelines[SDL_HANDLE_MAX_COUNT];        int sdl_pipelines_index = -1;
+SDL_GPUTransferBuffer*   sdl_transfer_buffers[SDL_HANDLE_MAX_COUNT]; int sdl_transfer_buffers_index = -1;
+SDL_GPUBuffer*           sdl_buffers[SDL_HANDLE_MAX_COUNT*2];        int sdl_buffers_index = -1;
+SDL_GPUShader*           sdl_shaders[SDL_HANDLE_MAX_COUNT*2];        int sdl_shaders_index = -1;
+SDL_Window*              sdl_windows[SDL_HANDLE_MAX_COUNT];          int sdl_windows_index = -1;
+
+#define SDL_PUSH_PIPELINE(p)        (sdl_pipelines[++sdl_pipelines_index] = (p))
+#define SDL_PUSH_TRANSFER_BUFFER(b) (sdl_transfer_buffers[++sdl_transfer_buffers_index] = (b))
+#define SDL_PUSH_BUFFER(b)          (sdl_buffers[++sdl_buffers_index] = (b))
+#define SDL_PUSH_SHADER(s)          (sdl_shaders[++sdl_shaders_index] = (s))
+#define SDL_PUSH_WINDOW(w)          (sdl_windows[++sdl_windows_index] = (w))
+
+void sdl_cleanup() {
+    SDL_WaitForGPUIdle(sdl_device);
+
+    if (sdl_depth_tex)
+        SDL_ReleaseGPUTexture(sdl_device, sdl_depth_tex);
+
+    for (; sdl_pipelines_index > -1 ; sdl_pipelines_index--)
+        SDL_ReleaseGPUGraphicsPipeline(sdl_device, sdl_pipelines[sdl_pipelines_index]);
+    for (; sdl_transfer_buffers_index > -1 ; sdl_transfer_buffers_index--)
+        SDL_ReleaseGPUTransferBuffer(sdl_device, sdl_transfer_buffers[sdl_transfer_buffers_index]);
+    for (; sdl_buffers_index > -1 ; sdl_buffers_index--)
+        SDL_ReleaseGPUBuffer(sdl_device, sdl_buffers[sdl_buffers_index]);
+    for (; sdl_shaders_index > -1 ; sdl_shaders_index--)
+        SDL_ReleaseGPUShader(sdl_device, sdl_shaders[sdl_shaders_index]);
+
+    int w = sdl_windows_index;
+    for (; w > -1 ; w--)
+        SDL_ReleaseWindowFromGPUDevice(sdl_device, sdl_windows[w]);
+
+    SDL_DestroyGPUDevice(sdl_device);
+
+    for (; sdl_windows_index > -1 ; sdl_windows_index--)
+        SDL_DestroyWindow(sdl_windows[sdl_windows_index]);
+
+    SDL_Quit();
+}
+
 typedef struct Vertex
 {
     float px, py, pz;
@@ -52,46 +95,41 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    SDL_Window *window = SDL_CreateWindow("SDL3 GPU Rotating Cube", 900, 600, SDL_WINDOW_RESIZABLE);
+    SDL_Window* window = SDL_CreateWindow("SDL3 GPU Rotating Cube", 900, 600, SDL_WINDOW_RESIZABLE);
     if (!window)
     {
         fprintf(stderr, "SDL_CreateWindow failed: '%s'\n", SDL_GetError());
         dump_env();
-        SDL_Quit();
+        sdl_cleanup();
         return 1;
     }
+    SDL_PUSH_WINDOW(window);
 
-    SDL_GPUDevice *device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV, true, NULL);
-    if (!device)
+    sdl_device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV, true, NULL);
+    if (!sdl_device)
     {
         fprintf(stderr, "SDL_CreateGPUDevice failed: '%s'\n", SDL_GetError());
-        SDL_DestroyWindow(window);
-        SDL_Quit();
+        sdl_cleanup();
         return 1;
     }
 
-    if (!SDL_ClaimWindowForGPUDevice(device, window))
+    if (!SDL_ClaimWindowForGPUDevice(sdl_device, window))
     {
         fprintf(stderr, "SDL_ClaimWindowForGPUDevice failed: '%s'\n", SDL_GetError());
-        SDL_DestroyGPUDevice(device);
-        SDL_DestroyWindow(window);
-        SDL_Quit();
+        sdl_cleanup();
         return 1;
     }
 
-    SDL_GPUTextureFormat swap_format = SDL_GetGPUSwapchainTextureFormat(device, window);
+    SDL_GPUTextureFormat swap_format = SDL_GetGPUSwapchainTextureFormat(sdl_device, window);
 
-    SDL_GPUShader *vs = load_spirv_shader(device, "cube.vert.spv", SDL_GPU_SHADERSTAGE_VERTEX, 1);
-    SDL_GPUShader *fs = load_spirv_shader(device, "cube.frag.spv", SDL_GPU_SHADERSTAGE_FRAGMENT, 0);
+    SDL_GPUShader *vs = load_spirv_shader(sdl_device, "cube.vert.spv", SDL_GPU_SHADERSTAGE_VERTEX, 1);
+    SDL_GPUShader *fs = load_spirv_shader(sdl_device, "cube.frag.spv", SDL_GPU_SHADERSTAGE_FRAGMENT, 0);
+    SDL_PUSH_SHADER(vs);
+    SDL_PUSH_SHADER(fs);
     if (!vs || !fs)
     {
         fprintf(stderr, "Failed to load shaders. Need cube.vert.spv and cube.frag.spv\n");
-        if (vs) SDL_ReleaseGPUShader(device, vs);
-        if (fs) SDL_ReleaseGPUShader(device, fs);
-        SDL_ReleaseWindowFromGPUDevice(device, window);
-        SDL_DestroyGPUDevice(device);
-        SDL_DestroyWindow(window);
-        SDL_Quit();
+        sdl_cleanup();
         return 1;
     }
 
@@ -120,25 +158,20 @@ int main(int argc, char **argv)
     SDL_zero(vb_ci);
     vb_ci.size = (Uint32)sizeof(verts);
     vb_ci.usage = SDL_GPU_BUFFERUSAGE_VERTEX;
-    SDL_GPUBuffer *vb = SDL_CreateGPUBuffer(device, &vb_ci);
+    SDL_GPUBuffer *vb = SDL_CreateGPUBuffer(sdl_device, &vb_ci);
+    SDL_PUSH_BUFFER(vb);
 
     SDL_GPUBufferCreateInfo ib_ci;
     SDL_zero(ib_ci);
     ib_ci.size = (Uint32)sizeof(indices);
     ib_ci.usage = SDL_GPU_BUFFERUSAGE_INDEX;
-    SDL_GPUBuffer *ib = SDL_CreateGPUBuffer(device, &ib_ci);
+    SDL_GPUBuffer *ib = SDL_CreateGPUBuffer(sdl_device, &ib_ci);
+    SDL_PUSH_BUFFER(ib);
 
     if (!vb || !ib)
     {
         fprintf(stderr, "Failed to create GPU buffers: '%s'\n", SDL_GetError());
-        if (vb) SDL_ReleaseGPUBuffer(device, vb);
-        if (ib) SDL_ReleaseGPUBuffer(device, ib);
-        SDL_ReleaseGPUShader(device, vs);
-        SDL_ReleaseGPUShader(device, fs);
-        SDL_ReleaseWindowFromGPUDevice(device, window);
-        SDL_DestroyGPUDevice(device);
-        SDL_DestroyWindow(window);
-        SDL_Quit();
+        sdl_cleanup();
         return 1;
     }
 
@@ -146,43 +179,29 @@ int main(int argc, char **argv)
     SDL_zero(tb_ci);
     tb_ci.size = (Uint32)(sizeof(verts) + sizeof(indices));
     tb_ci.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-    SDL_GPUTransferBuffer *upload_tb = SDL_CreateGPUTransferBuffer(device, &tb_ci);
+    SDL_GPUTransferBuffer *upload_tb = SDL_CreateGPUTransferBuffer(sdl_device, &tb_ci);
 
     if (!upload_tb)
     {
         fprintf(stderr, "Failed to create transfer buffer: '%s'\n", SDL_GetError());
-        SDL_ReleaseGPUBuffer(device, vb);
-        SDL_ReleaseGPUBuffer(device, ib);
-        SDL_ReleaseGPUShader(device, vs);
-        SDL_ReleaseGPUShader(device, fs);
-        SDL_ReleaseWindowFromGPUDevice(device, window);
-        SDL_DestroyGPUDevice(device);
-        SDL_DestroyWindow(window);
-        SDL_Quit();
+        sdl_cleanup();
         return 1;
     }
+    SDL_PUSH_TRANSFER_BUFFER(upload_tb);
 
-    void *mapped = SDL_MapGPUTransferBuffer(device, upload_tb, false);
+    void *mapped = SDL_MapGPUTransferBuffer(sdl_device, upload_tb, false);
     if (!mapped)
     {
         fprintf(stderr, "Failed to map transfer buffer: '%s'\n", SDL_GetError());
-        SDL_ReleaseGPUTransferBuffer(device, upload_tb);
-        SDL_ReleaseGPUBuffer(device, vb);
-        SDL_ReleaseGPUBuffer(device, ib);
-        SDL_ReleaseGPUShader(device, vs);
-        SDL_ReleaseGPUShader(device, fs);
-        SDL_ReleaseWindowFromGPUDevice(device, window);
-        SDL_DestroyGPUDevice(device);
-        SDL_DestroyWindow(window);
-        SDL_Quit();
+        sdl_cleanup();
         return 1;
     }
 
     memcpy(mapped, verts, sizeof(verts));
     memcpy((uint8_t *)mapped + sizeof(verts), indices, sizeof(indices));
-    SDL_UnmapGPUTransferBuffer(device, upload_tb);
+    SDL_UnmapGPUTransferBuffer(sdl_device, upload_tb);
 
-    SDL_GPUCommandBuffer *init_cb = SDL_AcquireGPUCommandBuffer(device);
+    SDL_GPUCommandBuffer *init_cb = SDL_AcquireGPUCommandBuffer(sdl_device);
     SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(init_cb);
 
     SDL_GPUTransferBufferLocation src_v;
@@ -208,7 +227,7 @@ int main(int argc, char **argv)
 
     SDL_EndGPUCopyPass(copy);
     SDL_SubmitGPUCommandBuffer(init_cb);
-    SDL_WaitForGPUIdle(device);
+    SDL_WaitForGPUIdle(sdl_device);
 
     SDL_GPUVertexBufferDescription vbuf_desc;
     SDL_zero(vbuf_desc);
@@ -274,23 +293,14 @@ int main(int argc, char **argv)
     pso.multisample_state = ms;
     pso.target_info = tgt;
 
-    SDL_GPUGraphicsPipeline *pipeline = SDL_CreateGPUGraphicsPipeline(device, &pso);
+    SDL_GPUGraphicsPipeline *pipeline = SDL_CreateGPUGraphicsPipeline(sdl_device, &pso);
     if (!pipeline)
     {
         fprintf(stderr, "SDL_CreateGPUGraphicsPipeline failed: '%s'\n", SDL_GetError());
-        SDL_ReleaseGPUTransferBuffer(device, upload_tb);
-        SDL_ReleaseGPUBuffer(device, vb);
-        SDL_ReleaseGPUBuffer(device, ib);
-        SDL_ReleaseGPUShader(device, vs);
-        SDL_ReleaseGPUShader(device, fs);
-        SDL_ReleaseWindowFromGPUDevice(device, window);
-        SDL_DestroyGPUDevice(device);
-        SDL_DestroyWindow(window);
-        SDL_Quit();
+        sdl_cleanup();
         return 1;
     }
 
-    SDL_GPUTexture *depth_tex = NULL;
     Uint32 depth_w = 0;
     Uint32 depth_h = 0;
 
@@ -301,17 +311,7 @@ int main(int argc, char **argv)
     if (!luacam_init(&cam, "camera.lua"))
     {
         fprintf(stderr, "Failed to init Lua camera\n");
-        SDL_WaitForGPUIdle(device);
-        SDL_ReleaseGPUGraphicsPipeline(device, pipeline);
-        SDL_ReleaseGPUTransferBuffer(device, upload_tb);
-        SDL_ReleaseGPUBuffer(device, vb);
-        SDL_ReleaseGPUBuffer(device, ib);
-        SDL_ReleaseGPUShader(device, vs);
-        SDL_ReleaseGPUShader(device, fs);
-        SDL_ReleaseWindowFromGPUDevice(device, window);
-        SDL_DestroyGPUDevice(device);
-        SDL_DestroyWindow(window);
-        SDL_Quit();
+        sdl_cleanup();
         return 1;
     }
 
@@ -343,7 +343,7 @@ int main(int argc, char **argv)
         float dt_s = (float)((double)(now - last_frame) / 1000000000.0);
         last_frame = now;
 
-        SDL_GPUCommandBuffer *cb = SDL_AcquireGPUCommandBuffer(device);
+        SDL_GPUCommandBuffer *cb = SDL_AcquireGPUCommandBuffer(sdl_device);
 
         SDL_GPUTexture *swap_tex = NULL;
         Uint32 w = 0;
@@ -355,12 +355,12 @@ int main(int argc, char **argv)
             continue;
         }
 
-        if (!depth_tex || w != depth_w || h != depth_h)
+        if (!sdl_depth_tex || w != depth_w || h != depth_h)
         {
-            if (depth_tex)
+            if (sdl_depth_tex)
             {
-                SDL_ReleaseGPUTexture(device, depth_tex);
-                depth_tex = NULL;
+                SDL_ReleaseGPUTexture(sdl_device, sdl_depth_tex);
+                sdl_depth_tex = NULL;
             }
 
             SDL_GPUTextureCreateInfo tci;
@@ -374,11 +374,11 @@ int main(int argc, char **argv)
             tci.num_levels = 1;
             tci.sample_count = SDL_GPU_SAMPLECOUNT_1;
 
-            depth_tex = SDL_CreateGPUTexture(device, &tci);
+            sdl_depth_tex = SDL_CreateGPUTexture(sdl_device, &tci);
             depth_w = w;
             depth_h = h;
 
-            if (!depth_tex)
+            if (!sdl_depth_tex)
             {
                 fprintf(stderr, "Failed to create depth texture: '%s'\n", SDL_GetError());
                 SDL_SubmitGPUCommandBuffer(cb);
@@ -426,7 +426,7 @@ int main(int argc, char **argv)
 
         SDL_GPUDepthStencilTargetInfo depth;
         SDL_zero(depth);
-        depth.texture = depth_tex;
+        depth.texture = sdl_depth_tex;
         depth.clear_depth = 1.0f;
         depth.load_op = SDL_GPU_LOADOP_CLEAR;
         depth.store_op = SDL_GPU_STOREOP_STORE;
@@ -456,20 +456,7 @@ int main(int argc, char **argv)
 
     luacam_shutdown(&cam);
 
-    SDL_WaitForGPUIdle(device);
-
-    if (depth_tex) SDL_ReleaseGPUTexture(device, depth_tex);
-    SDL_ReleaseGPUGraphicsPipeline(device, pipeline);
-    SDL_ReleaseGPUTransferBuffer(device, upload_tb);
-    SDL_ReleaseGPUBuffer(device, vb);
-    SDL_ReleaseGPUBuffer(device, ib);
-    SDL_ReleaseGPUShader(device, vs);
-    SDL_ReleaseGPUShader(device, fs);
-
-    SDL_ReleaseWindowFromGPUDevice(device, window);
-    SDL_DestroyGPUDevice(device);
-    SDL_DestroyWindow(window);
-    SDL_Quit();
+    sdl_cleanup();
     return 0;
 }
 

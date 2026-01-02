@@ -4,9 +4,9 @@ LDFLAGS = -lm
 SDL     = $(shell pkg-config --cflags --libs sdl3)
 LUA     = $(shell pkg-config --cflags --libs lua5.4)
 
-BIN     = cube
+BIN     = sdl_game
 
-SRC     = cube.c lua_cam.c
+SRC     = main.c lua_cam.c
 VERT    = cube.vert.glsl
 FRAG    = cube.frag.glsl
 VSPV    = cube.vert.spv
