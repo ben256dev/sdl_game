@@ -62,7 +62,7 @@ static SDL_GPUShader *load_spirv_shader(SDL_GPUDevice *device, const char *path,
     ci.code = code;
     ci.code_size = (Uint32)code_size;
     ci.entrypoint = "main";
-    ci.num_samplers = 0;
+    ci.num_samplers = (stage == SDL_GPU_SHADERSTAGE_FRAGMENT);
     ci.num_storage_textures = 0;
     ci.num_storage_buffers = 0;
     ci.num_uniform_buffers = num_uniform_buffers;
