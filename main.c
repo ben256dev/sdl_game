@@ -8,22 +8,24 @@
 #include <string.h>
 
 #include "vec2.h"
+#include "vec3.h"
 #include "mat4.h"
 #include "shader.h"
 #include "log.h"
 #include "lua_cam.h"
+#include "image.h"
 
-SDL_GPUDevice *sdl_device = NULL;
-SDL_GPUTexture *sdl_depth_tex = NULL;
-SDL_GPUTexture *sdl_tex = NULL;
-SDL_GPUSampler *sdl_samp = NULL;
+SDL_GPUDevice*  sdl_device;
+SDL_GPUTexture* sdl_depth_tex = NULL;
+SDL_GPUTexture* sdl_tex = NULL;
+SDL_GPUSampler* sdl_samp = NULL;
 
 #define SDL_HANDLE_MAX_COUNT 10
-SDL_GPUGraphicsPipeline *sdl_pipelines[SDL_HANDLE_MAX_COUNT];        int sdl_pipelines_index = -1;
-SDL_GPUTransferBuffer   *sdl_transfer_buffers[SDL_HANDLE_MAX_COUNT]; int sdl_transfer_buffers_index = -1;
-SDL_GPUBuffer           *sdl_buffers[SDL_HANDLE_MAX_COUNT * 2];      int sdl_buffers_index = -1;
-SDL_GPUShader           *sdl_shaders[SDL_HANDLE_MAX_COUNT * 2];      int sdl_shaders_index = -1;
-SDL_Window              *sdl_windows[SDL_HANDLE_MAX_COUNT];          int sdl_windows_index = -1;
+SDL_GPUGraphicsPipeline* sdl_pipelines[SDL_HANDLE_MAX_COUNT];        int sdl_pipelines_index = -1;
+SDL_GPUTransferBuffer*   sdl_transfer_buffers[SDL_HANDLE_MAX_COUNT]; int sdl_transfer_buffers_index = -1;
+SDL_GPUBuffer*           sdl_buffers[SDL_HANDLE_MAX_COUNT*2];        int sdl_buffers_index = -1;
+SDL_GPUShader*           sdl_shaders[SDL_HANDLE_MAX_COUNT*2];        int sdl_shaders_index = -1;
+SDL_Window*              sdl_windows[SDL_HANDLE_MAX_COUNT];          int sdl_windows_index = -1;
 
 #define SDL_PUSH_PIPELINE(p)        (sdl_pipelines[++sdl_pipelines_index] = (p))
 #define SDL_PUSH_TRANSFER_BUFFER(b) (sdl_transfer_buffers[++sdl_transfer_buffers_index] = (b))
@@ -45,23 +47,26 @@ void sdl_cleanup(void)
     if (sdl_depth_tex)
         SDL_ReleaseGPUTexture(sdl_device, sdl_depth_tex);
 
-    for (; sdl_pipelines_index > -1; sdl_pipelines_index--)
+    for (; sdl_pipelines_index > -1 ; sdl_pipelines_index--)
         SDL_ReleaseGPUGraphicsPipeline(sdl_device, sdl_pipelines[sdl_pipelines_index]);
-    for (; sdl_transfer_buffers_index > -1; sdl_transfer_buffers_index--)
+
+    for (; sdl_transfer_buffers_index > -1 ; sdl_transfer_buffers_index--)
         SDL_ReleaseGPUTransferBuffer(sdl_device, sdl_transfer_buffers[sdl_transfer_buffers_index]);
-    for (; sdl_buffers_index > -1; sdl_buffers_index--)
+
+    for (; sdl_buffers_index > -1 ; sdl_buffers_index--)
         SDL_ReleaseGPUBuffer(sdl_device, sdl_buffers[sdl_buffers_index]);
-    for (; sdl_shaders_index > -1; sdl_shaders_index--)
+
+    for (; sdl_shaders_index > -1 ; sdl_shaders_index--)
         SDL_ReleaseGPUShader(sdl_device, sdl_shaders[sdl_shaders_index]);
 
     int w = sdl_windows_index;
-    for (; w > -1; w--)
+    for (; w > -1 ; w--)
         SDL_ReleaseWindowFromGPUDevice(sdl_device, sdl_windows[w]);
 
     if (sdl_device)
         SDL_DestroyGPUDevice(sdl_device);
 
-    for (; sdl_windows_index > -1; sdl_windows_index--)
+    for (; sdl_windows_index > -1 ; sdl_windows_index--)
         SDL_DestroyWindow(sdl_windows[sdl_windows_index]);
 
     SDL_Quit();
@@ -108,7 +113,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    SDL_Window *window = SDL_CreateWindow("SDL3 GPU Rotating Cube", 900, 600, SDL_WINDOW_RESIZABLE);
+    SDL_Window* window = SDL_CreateWindow("SDL3 GPU Grass Plane", 900, 600, SDL_WINDOW_RESIZABLE);
     if (!window)
     {
         fprintf(stderr, "SDL_CreateWindow failed: '%s'\n", SDL_GetError());
@@ -136,9 +141,9 @@ int main(int argc, char **argv)
     SDL_GPUTextureFormat swap_format = SDL_GetGPUSwapchainTextureFormat(sdl_device, window);
 
     SDL_GPUShader *vs = load_spirv_shader(sdl_device, "cube.vert.spv", SDL_GPU_SHADERSTAGE_VERTEX, 1);
-    SDL_GPUShader *fs = load_spirv_shader(sdl_device, "cube.frag.spv", SDL_GPU_SHADERSTAGE_FRAGMENT, 1);
-    if (vs) SDL_PUSH_SHADER(vs);
-    if (fs) SDL_PUSH_SHADER(fs);
+    SDL_GPUShader *fs = load_spirv_shader(sdl_device, "cube.frag.spv", SDL_GPU_SHADERSTAGE_FRAGMENT, 0);
+    SDL_PUSH_SHADER(vs);
+    SDL_PUSH_SHADER(fs);
     if (!vs || !fs)
     {
         fprintf(stderr, "Failed to load shaders. Need cube.vert.spv and cube.frag.spv\n");
@@ -146,46 +151,32 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    if (!gpu_load_texture_rgba8(sdl_device, "assets/grass.jpg", &sdl_tex, NULL, NULL))
+    {
+        fprintf(stderr, "Failed to load assets/grass.jpg\n");
+        sdl_cleanup();
+        return 1;
+    }
+
+    sdl_samp = gpu_create_sampler_repeat_linear(sdl_device);
+    if (!sdl_samp)
+    {
+        fprintf(stderr, "Failed to create sampler: '%s'\n", SDL_GetError());
+        sdl_cleanup();
+        return 1;
+    }
+
+    const float PLANE_SIZE = 50.0f;
+    const float PLANE_TILES = 16.0f;
+
     Vertex verts[] = {
-        { -0.5f, -0.5f,  0.5f,  1.0f, 1.0f, 1.0f,  0.0f, 0.0f },
-        {  0.5f, -0.5f,  0.5f,  1.0f, 1.0f, 1.0f,  1.0f, 0.0f },
-        {  0.5f,  0.5f,  0.5f,  1.0f, 1.0f, 1.0f,  1.0f, 1.0f },
-        { -0.5f,  0.5f,  0.5f,  1.0f, 1.0f, 1.0f,  0.0f, 1.0f },
-
-        {  0.5f, -0.5f, -0.5f,  1.0f, 1.0f, 1.0f,  0.0f, 0.0f },
-        { -0.5f, -0.5f, -0.5f,  1.0f, 1.0f, 1.0f,  1.0f, 0.0f },
-        { -0.5f,  0.5f, -0.5f,  1.0f, 1.0f, 1.0f,  1.0f, 1.0f },
-        {  0.5f,  0.5f, -0.5f,  1.0f, 1.0f, 1.0f,  0.0f, 1.0f },
-
-        { -0.5f, -0.5f, -0.5f,  1.0f, 1.0f, 1.0f,  0.0f, 0.0f },
-        { -0.5f, -0.5f,  0.5f,  1.0f, 1.0f, 1.0f,  1.0f, 0.0f },
-        { -0.5f,  0.5f,  0.5f,  1.0f, 1.0f, 1.0f,  1.0f, 1.0f },
-        { -0.5f,  0.5f, -0.5f,  1.0f, 1.0f, 1.0f,  0.0f, 1.0f },
-
-        {  0.5f, -0.5f,  0.5f,  1.0f, 1.0f, 1.0f,  0.0f, 0.0f },
-        {  0.5f, -0.5f, -0.5f,  1.0f, 1.0f, 1.0f,  1.0f, 0.0f },
-        {  0.5f,  0.5f, -0.5f,  1.0f, 1.0f, 1.0f,  1.0f, 1.0f },
-        {  0.5f,  0.5f,  0.5f,  1.0f, 1.0f, 1.0f,  0.0f, 1.0f },
-
-        { -0.5f,  0.5f,  0.5f,  1.0f, 1.0f, 1.0f,  0.0f, 0.0f },
-        {  0.5f,  0.5f,  0.5f,  1.0f, 1.0f, 1.0f,  1.0f, 0.0f },
-        {  0.5f,  0.5f, -0.5f,  1.0f, 1.0f, 1.0f,  1.0f, 1.0f },
-        { -0.5f,  0.5f, -0.5f,  1.0f, 1.0f, 1.0f,  0.0f, 1.0f },
-
-        { -0.5f, -0.5f, -0.5f,  1.0f, 1.0f, 1.0f,  0.0f, 0.0f },
-        {  0.5f, -0.5f, -0.5f,  1.0f, 1.0f, 1.0f,  1.0f, 0.0f },
-        {  0.5f, -0.5f,  0.5f,  1.0f, 1.0f, 1.0f,  1.0f, 1.0f },
-        { -0.5f, -0.5f,  0.5f,  1.0f, 1.0f, 1.0f,  0.0f, 1.0f },
+        { -PLANE_SIZE, 0.0f, -PLANE_SIZE,  1.0f, 1.0f, 1.0f,  0.0f, 0.0f },
+        {  PLANE_SIZE, 0.0f, -PLANE_SIZE,  1.0f, 1.0f, 1.0f,  PLANE_TILES, 0.0f },
+        {  PLANE_SIZE, 0.0f,  PLANE_SIZE,  1.0f, 1.0f, 1.0f,  PLANE_TILES, PLANE_TILES },
+        { -PLANE_SIZE, 0.0f,  PLANE_SIZE,  1.0f, 1.0f, 1.0f,  0.0f, PLANE_TILES },
     };
 
-    uint16_t indices[] = {
-         0,  1,  2,   0,  2,  3,
-         4,  5,  6,   4,  6,  7,
-         8,  9, 10,   8, 10, 11,
-        12, 13, 14,  12, 14, 15,
-        16, 17, 18,  16, 18, 19,
-        20, 21, 22,  20, 22, 23,
-    };
+    uint16_t indices[] = { 0, 1, 2, 0, 2, 3 };
 
     SDL_GPUBufferCreateInfo vb_ci;
     SDL_zero(vb_ci);
@@ -213,6 +204,7 @@ int main(int argc, char **argv)
     tb_ci.size = (Uint32)(sizeof(verts) + sizeof(indices));
     tb_ci.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
     SDL_GPUTransferBuffer *upload_tb = SDL_CreateGPUTransferBuffer(sdl_device, &tb_ci);
+    SDL_PUSH_TRANSFER_BUFFER(upload_tb);
 
     if (!upload_tb)
     {
@@ -220,7 +212,6 @@ int main(int argc, char **argv)
         sdl_cleanup();
         return 1;
     }
-    SDL_PUSH_TRANSFER_BUFFER(upload_tb);
 
     void *mapped = SDL_MapGPUTransferBuffer(sdl_device, upload_tb, false);
     if (!mapped)
@@ -308,7 +299,7 @@ int main(int argc, char **argv)
     SDL_zero(rast);
     rast.fill_mode = SDL_GPU_FILLMODE_FILL;
     rast.cull_mode = SDL_GPU_CULLMODE_BACK;
-    rast.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
+    rast.front_face = SDL_GPU_FRONTFACE_CLOCKWISE;
 
     SDL_GPUDepthStencilState ds;
     SDL_zero(ds);
@@ -357,103 +348,6 @@ int main(int argc, char **argv)
     bool mouse_look_on = false;
     SDL_SetWindowRelativeMouseMode(window, mouse_look_on);
 
-    {
-#define SOFT_WHITE 240, 240, 242, 255
-#define SOFT_GREEN 0, 180, 0, 255
-        const Uint32 tex_w = 2;
-        const Uint32 tex_h = 2;
-        const Uint8 pixels[] = {
-            SOFT_GREEN,
-            SOFT_WHITE,
-            SOFT_WHITE,
-            SOFT_GREEN
-        };
-
-        SDL_GPUTextureCreateInfo tci;
-        SDL_zero(tci);
-        tci.type = SDL_GPU_TEXTURETYPE_2D;
-        tci.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
-        tci.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
-        tci.width = tex_w;
-        tci.height = tex_h;
-        tci.layer_count_or_depth = 1;
-        tci.num_levels = 1;
-        tci.sample_count = SDL_GPU_SAMPLECOUNT_1;
-
-        sdl_tex = SDL_CreateGPUTexture(sdl_device, &tci);
-
-        SDL_GPUSamplerCreateInfo sci;
-        SDL_zero(sci);
-        sci.min_filter = SDL_GPU_FILTER_NEAREST;
-        sci.mag_filter = SDL_GPU_FILTER_NEAREST;
-        sci.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST;
-        sci.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
-        sci.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
-        sci.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
-
-        sdl_samp = SDL_CreateGPUSampler(sdl_device, &sci);
-
-        if (!sdl_tex || !sdl_samp)
-        {
-            fprintf(stderr, "Failed to create texture/sampler: '%s'\n", SDL_GetError());
-            sdl_cleanup();
-            return 1;
-        }
-
-        SDL_GPUTransferBufferCreateInfo tex_tb_ci;
-        SDL_zero(tex_tb_ci);
-        tex_tb_ci.size = tex_w * tex_h * 4;
-        tex_tb_ci.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-        SDL_GPUTransferBuffer *tb = SDL_CreateGPUTransferBuffer(sdl_device, &tex_tb_ci);
-
-        if (!tb)
-        {
-            fprintf(stderr, "Failed to create texture transfer buffer: '%s'\n", SDL_GetError());
-            sdl_cleanup();
-            return 1;
-        }
-
-        void *tex_mapped = SDL_MapGPUTransferBuffer(sdl_device, tb, false);
-        if (!tex_mapped)
-        {
-            fprintf(stderr, "Failed to map texture transfer buffer: '%s'\n", SDL_GetError());
-            SDL_ReleaseGPUTransferBuffer(sdl_device, tb);
-            sdl_cleanup();
-            return 1;
-        }
-
-        memcpy(tex_mapped, pixels, sizeof(pixels));
-        SDL_UnmapGPUTransferBuffer(sdl_device, tb);
-
-        SDL_GPUCommandBuffer *tcb = SDL_AcquireGPUCommandBuffer(sdl_device);
-        SDL_GPUCopyPass *cp = SDL_BeginGPUCopyPass(tcb);
-
-        SDL_GPUTextureTransferInfo src;
-        src.transfer_buffer = tb;
-        src.offset = 0;
-        src.pixels_per_row = tex_w;
-        src.rows_per_layer = tex_h;
-
-        SDL_GPUTextureRegion dst;
-        dst.texture = sdl_tex;
-        dst.mip_level = 0;
-        dst.layer = 0;
-        dst.x = 0;
-        dst.y = 0;
-        dst.z = 0;
-        dst.w = tex_w;
-        dst.h = tex_h;
-        dst.d = 1;
-
-        SDL_UploadToGPUTexture(cp, &src, &dst, false);
-
-        SDL_EndGPUCopyPass(cp);
-        SDL_SubmitGPUCommandBuffer(tcb);
-        SDL_WaitForGPUIdle(sdl_device);
-
-        SDL_ReleaseGPUTransferBuffer(sdl_device, tb);
-    }
-
     int running = 1;
     while (running)
     {
@@ -466,7 +360,7 @@ int main(int argc, char **argv)
         while (SDL_PollEvent(&event))
         {
             if (event.type == SDL_EVENT_QUIT)
-                running = false;
+                running = 0;
 
             if (event.type == SDL_EVENT_MOUSE_MOTION)
             {
@@ -526,7 +420,7 @@ int main(int argc, char **argv)
         float aspect = (h == 0) ? 1.0f : ((float)w / (float)h);
 
         const float PI = 3.14159265358979323846f;
-        mat4 proj = mat4_perspective(45.0f * (PI / 180.0f), aspect, 0.1f, 100.0f);
+        mat4 proj = mat4_perspective(45.0f * (PI / 180.0f), aspect, 0.1f, 500.0f);
 
         uint64_t keys_mask = build_key_mask();
 
@@ -537,7 +431,7 @@ int main(int argc, char **argv)
         if (luacam_update(&cam, keys_mask, mouse_dx, mouse_dy, dt_s, &view, &want_mouse_look, &want_quit))
         {
             if (want_quit)
-                running = false;
+                running = 0;
 
             if (want_mouse_look != mouse_look_on)
             {
@@ -546,7 +440,7 @@ int main(int argc, char **argv)
             }
         }
 
-        mat4 model = mat4_mul(mat4_rotate_y(time_s), mat4_rotate_x(time_s * 0.7f));
+        mat4 model = mat4_identity();
         mat4 mv = mat4_mul(view, model);
         mat4 mvp = mat4_mul(proj, mv);
 
@@ -588,15 +482,15 @@ int main(int argc, char **argv)
 
         SDL_PushGPUVertexUniformData(cb, 0, &mvp, (Uint32)sizeof(mvp));
 
-        SDL_DrawGPUIndexedPrimitives(rp, 36, 1, 0, 0, 0);
+        SDL_DrawGPUIndexedPrimitives(rp, 6, 1, 0, 0, 0);
 
         SDL_EndGPURenderPass(rp);
 
         SDL_SubmitGPUCommandBuffer(cb);
+        (void)time_s;
     }
 
     luacam_shutdown(&cam);
-
     sdl_cleanup();
     return 0;
 }

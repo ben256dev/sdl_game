@@ -6,7 +6,7 @@ LUA     = $(shell pkg-config --cflags --libs lua5.4)
 
 BIN     = sdl_game
 
-SRC     = main.c lua_cam.c
+SRC     = main.c lua_cam.c image.c stb_image_impl.c
 VERT    = cube.vert.glsl
 FRAG    = cube.frag.glsl
 VSPV    = cube.vert.spv
