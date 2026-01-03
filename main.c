@@ -18,7 +18,9 @@
 SDL_GPUDevice*  sdl_device;
 SDL_GPUTexture* sdl_depth_tex = NULL;
 SDL_GPUTexture* sdl_tex = NULL;
-SDL_GPUSampler* sdl_samp = NULL;
+SDL_GPUSampler* sdl_samp_linear = NULL;
+SDL_GPUSampler* sdl_samp_nearest = NULL;
+SDL_GPUSampler* sdl_samp_active = NULL;
 
 #define SDL_HANDLE_MAX_COUNT 10
 SDL_GPUGraphicsPipeline* sdl_pipelines[SDL_HANDLE_MAX_COUNT];        int sdl_pipelines_index = -1;
@@ -33,13 +35,41 @@ SDL_Window*              sdl_windows[SDL_HANDLE_MAX_COUNT];          int sdl_win
 #define SDL_PUSH_SHADER(s)          (sdl_shaders[++sdl_shaders_index] = (s))
 #define SDL_PUSH_WINDOW(w)          (sdl_windows[++sdl_windows_index] = (w))
 
+typedef struct Vertex
+{
+    float px, py, pz;
+    float cr, cg, cb;
+    float u, v;
+} Vertex;
+
+static uint64_t build_key_mask(void)
+{
+    const bool *keys = SDL_GetKeyboardState(NULL);
+    uint64_t m = 0;
+
+    if (keys[SDL_SCANCODE_LEFT])  m |= CAMKEY_LEFT;
+    if (keys[SDL_SCANCODE_RIGHT]) m |= CAMKEY_RIGHT;
+    if (keys[SDL_SCANCODE_UP])    m |= CAMKEY_UP;
+    if (keys[SDL_SCANCODE_DOWN])  m |= CAMKEY_DOWN;
+    if (keys[SDL_SCANCODE_SPACE]) m |= CAMKEY_SPACE;
+    if (keys[SDL_SCANCODE_LCTRL] || keys[SDL_SCANCODE_RCTRL]) m |= CAMKEY_LCTRL;
+    if (keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT]) m |= CAMKEY_LSHIFT;
+    if (keys[SDL_SCANCODE_TAB])   m |= CAMKEY_TAB;
+    if (keys[SDL_SCANCODE_ESCAPE]) m |= CAMKEY_ESC;
+
+    return m;
+}
+
 void sdl_cleanup(void)
 {
     if (sdl_device)
         SDL_WaitForGPUIdle(sdl_device);
 
-    if (sdl_samp)
-        SDL_ReleaseGPUSampler(sdl_device, sdl_samp);
+    if (sdl_samp_linear)
+        SDL_ReleaseGPUSampler(sdl_device, sdl_samp_linear);
+
+    if (sdl_samp_nearest)
+        SDL_ReleaseGPUSampler(sdl_device, sdl_samp_nearest);
 
     if (sdl_tex)
         SDL_ReleaseGPUTexture(sdl_device, sdl_tex);
@@ -72,29 +102,87 @@ void sdl_cleanup(void)
     SDL_Quit();
 }
 
-typedef struct Vertex
+#define SOFT_WHITE 245, 245, 242, 255
+#define SOFT_GREEN 120, 170, 120, 255
+
+static SDL_GPUTexture *create_default_checker_texture(SDL_GPUDevice *device)
 {
-    float px, py, pz;
-    float cr, cg, cb;
-    float u, v;
-} Vertex;
+    const Uint32 tex_w = 2;
+    const Uint32 tex_h = 2;
 
-static uint64_t build_key_mask(void)
-{
-    const bool *keys = SDL_GetKeyboardState(NULL);
-    uint64_t m = 0;
+    const Uint8 pixels[] = {
+        SOFT_WHITE, SOFT_GREEN,
+        SOFT_GREEN, SOFT_WHITE
+    };
 
-    if (keys[SDL_SCANCODE_LEFT])  m |= CAMKEY_LEFT;
-    if (keys[SDL_SCANCODE_RIGHT]) m |= CAMKEY_RIGHT;
-    if (keys[SDL_SCANCODE_UP])    m |= CAMKEY_UP;
-    if (keys[SDL_SCANCODE_DOWN])  m |= CAMKEY_DOWN;
-    if (keys[SDL_SCANCODE_SPACE]) m |= CAMKEY_SPACE;
-    if (keys[SDL_SCANCODE_LCTRL] || keys[SDL_SCANCODE_RCTRL]) m |= CAMKEY_LCTRL;
-    if (keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT]) m |= CAMKEY_LSHIFT;
-    if (keys[SDL_SCANCODE_TAB])   m |= CAMKEY_TAB;
-    if (keys[SDL_SCANCODE_ESCAPE]) m |= CAMKEY_ESC;
+    SDL_GPUTextureCreateInfo tci;
+    SDL_zero(tci);
+    tci.type = SDL_GPU_TEXTURETYPE_2D;
+    tci.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+    tci.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    tci.width = tex_w;
+    tci.height = tex_h;
+    tci.layer_count_or_depth = 1;
+    tci.num_levels = 1;
+    tci.sample_count = SDL_GPU_SAMPLECOUNT_1;
 
-    return m;
+    SDL_GPUTexture *tex = SDL_CreateGPUTexture(device, &tci);
+    if (!tex)
+        return NULL;
+
+    SDL_GPUTransferBufferCreateInfo tb_ci;
+    SDL_zero(tb_ci);
+    tb_ci.size = (Uint32)sizeof(pixels);
+    tb_ci.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+
+    SDL_GPUTransferBuffer *tb = SDL_CreateGPUTransferBuffer(device, &tb_ci);
+    if (!tb)
+    {
+        SDL_ReleaseGPUTexture(device, tex);
+        return NULL;
+    }
+
+    void *mapped = SDL_MapGPUTransferBuffer(device, tb, false);
+    if (!mapped)
+    {
+        SDL_ReleaseGPUTransferBuffer(device, tb);
+        SDL_ReleaseGPUTexture(device, tex);
+        return NULL;
+    }
+
+    memcpy(mapped, pixels, sizeof(pixels));
+    SDL_UnmapGPUTransferBuffer(device, tb);
+
+    SDL_GPUCommandBuffer *cb = SDL_AcquireGPUCommandBuffer(device);
+    SDL_GPUCopyPass *cp = SDL_BeginGPUCopyPass(cb);
+
+    SDL_GPUTextureTransferInfo src;
+    SDL_zero(src);
+    src.transfer_buffer = tb;
+    src.offset = 0;
+    src.pixels_per_row = tex_w;
+    src.rows_per_layer = tex_h;
+
+    SDL_GPUTextureRegion dst;
+    SDL_zero(dst);
+    dst.texture = tex;
+    dst.mip_level = 0;
+    dst.layer = 0;
+    dst.x = 0;
+    dst.y = 0;
+    dst.z = 0;
+    dst.w = tex_w;
+    dst.h = tex_h;
+    dst.d = 1;
+
+    SDL_UploadToGPUTexture(cp, &src, &dst, false);
+
+    SDL_EndGPUCopyPass(cp);
+    SDL_SubmitGPUCommandBuffer(cb);
+    SDL_WaitForGPUIdle(device);
+
+    SDL_ReleaseGPUTransferBuffer(device, tb);
+    return tex;
 }
 
 int main(int argc, char **argv)
@@ -151,20 +239,32 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (!gpu_load_texture_rgba8(sdl_device, "assets/grass.jpg", &sdl_tex, NULL, NULL))
+    SDL_GPUTexture* sdl_tex_default = create_default_checker_texture(sdl_device);
+
+    sdl_samp_linear = gpu_create_sampler_repeat_linear(sdl_device);
+    if (!sdl_samp_linear)
     {
-        fprintf(stderr, "Failed to load assets/grass.jpg\n");
+        fprintf(stderr, "Failed to create linear sampler: '%s'\n", SDL_GetError());
         sdl_cleanup();
         return 1;
     }
 
-    sdl_samp = gpu_create_sampler_repeat_linear(sdl_device);
-    if (!sdl_samp)
+    sdl_samp_nearest = gpu_create_sampler_repeat_nearest(sdl_device);
+    if (!sdl_samp_nearest)
     {
-        fprintf(stderr, "Failed to create sampler: '%s'\n", SDL_GetError());
+        fprintf(stderr, "Failed to create nearest sampler: '%s'\n", SDL_GetError());
         sdl_cleanup();
         return 1;
     }
+
+    if (!gpu_load_texture_rgba8(sdl_device, "assets/grass.jpg", &sdl_tex, NULL, NULL))
+    {
+        fprintf(stderr, "Failed to load assets/grass.jpg\n");
+        sdl_tex = sdl_tex_default;
+        sdl_samp_active = sdl_samp_nearest;
+    }
+    else
+        sdl_samp_active = sdl_samp_linear;
 
     const float PLANE_SIZE = 50.0f;
     const float PLANE_TILES = 16.0f;
@@ -467,7 +567,7 @@ int main(int argc, char **argv)
 
         SDL_GPUTextureSamplerBinding tsb;
         tsb.texture = sdl_tex;
-        tsb.sampler = sdl_samp;
+        tsb.sampler = sdl_samp_active;
         SDL_BindGPUFragmentSamplers(rp, 0, &tsb, 1);
 
         SDL_GPUBufferBinding vbind;

@@ -96,6 +96,19 @@ bool gpu_load_texture_rgba8(SDL_GPUDevice *device, const char *path, SDL_GPUText
     return true;
 }
 
+SDL_GPUSampler *gpu_create_sampler_repeat_nearest(SDL_GPUDevice *device)
+{
+    SDL_GPUSamplerCreateInfo sci;
+    SDL_zero(sci);
+    sci.min_filter = SDL_GPU_FILTER_NEAREST;
+    sci.mag_filter = SDL_GPU_FILTER_NEAREST;
+    sci.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST;
+    sci.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
+    sci.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
+    sci.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
+    return SDL_CreateGPUSampler(device, &sci);
+}
+
 SDL_GPUSampler *gpu_create_sampler_repeat_linear(SDL_GPUDevice *device)
 {
     SDL_GPUSamplerCreateInfo sci;
