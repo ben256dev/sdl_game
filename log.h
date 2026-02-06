@@ -5,12 +5,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-static void SDLCALL sdl_log_cb(void *userdata, int category, SDL_LogPriority priority, const char *message)
-{
-    (void)userdata;
-    fprintf(stderr, "SDL[%d][%d] %s\n", category, (int)priority, message);
-}
-
 static void dump_env(void)
 {
     const char *a = getenv("DISPLAY");

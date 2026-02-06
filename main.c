@@ -11,7 +11,6 @@
 #include "vec3.h"
 #include "mat4.h"
 #include "shader.h"
-#include "log.h"
 #include "lua_cam.h"
 #include "image.h"
 
@@ -185,6 +184,12 @@ static SDL_GPUTexture *create_default_checker_texture(SDL_GPUDevice *device)
     return tex;
 }
 
+static void SDLCALL sdl_log_cb(void *userdata, int category, SDL_LogPriority priority, const char *message)
+{
+    (void)userdata;
+    fprintf(stderr, "SDL[%d][%d] %s\n", category, (int)priority, message);
+}
+
 int main(int argc, char **argv)
 {
     (void)argc;
@@ -196,8 +201,13 @@ int main(int argc, char **argv)
     if (!SDL_Init(SDL_INIT_VIDEO))
     {
         fprintf(stderr, "SDL_Init failed: '%s'\n", SDL_GetError());
-        dump_env();
-        dump_video_drivers();
+        int n = SDL_GetNumVideoDrivers();
+        fprintf(stderr, "SDL_GetNumVideoDrivers=%d\n", n);
+        for (int i = 0; i < n; i++)
+        {
+            const char *name = SDL_GetVideoDriver(i);
+            fprintf(stderr, "  video_driver[%d]=%s\n", i, name ? name : "(null)");
+        }
         return 1;
     }
 
@@ -205,7 +215,6 @@ int main(int argc, char **argv)
     if (!window)
     {
         fprintf(stderr, "SDL_CreateWindow failed: '%s'\n", SDL_GetError());
-        dump_env();
         sdl_cleanup();
         return 1;
     }
@@ -594,4 +603,3 @@ int main(int argc, char **argv)
     sdl_cleanup();
     return 0;
 }
-

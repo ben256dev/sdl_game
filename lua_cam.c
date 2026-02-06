@@ -543,7 +543,6 @@ void luacam_shutdown(LuaCam *cam)
     }
 }
 
-bool luacam_reload_if_needed(LuaCam *cam)
 {
     if (!cam || cam->inotify_fd < 0)
         return false;
